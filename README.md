@@ -237,3 +237,249 @@ For a production deployment, configure a supported Django application server, HT
 ## Assumptions to Confirm
 
 Before treating this design as implemented, verify whether the project includes Django REST Framework, user accounts, authentication, per-user task ownership, Django admin, the suggested routes, PostgreSQL, and the proposed production hosting tools. Update the diagram and tables to match the actual project.
+
+## Detailed API Design
+
+> The API contract below is a proposed design for implementation. Paths and behaviors should be aligned with the code once the Django API is built.
+
+### API Conventions
+
+- Base path: `/api/v1/`
+- Content type: `application/json`
+- Authentication: require an authenticated user for task endpoints if tasks are private. Use Django session authentication for browser clients or token authentication for mobile/third-party clients; choose one and configure it consistently.
+- Resource format: task objects use `id`, `title`, `description`, `is_completed`, `created_at`, and `updated_at`. The API derives `owner` from the authenticated user and does not accept it in task create/update requests.
+- Dates: return timestamps in ISO 8601 format with timezone information.
+- Unknown task IDs and tasks owned by another user should both return `404` so the API does not reveal another user's records.
+
+### Endpoint Contract
+
+| Method and path | Authentication | Purpose | Success status |
+|---|---|---|---:|
+| `POST /api/v1/tasks/` | Required | Create a task owned by the current user | `201 Created` |
+| `GET /api/v1/tasks/` | Required | List the current user's tasks | `200 OK` |
+| `GET /api/v1/tasks/{id}/` | Required | Retrieve one of the current user's tasks | `200 OK` |
+| `PUT /api/v1/tasks/{id}/` | Required | Replace editable fields of a task | `200 OK` |
+| `PATCH /api/v1/tasks/{id}/` | Required | Update one or more editable fields | `200 OK` |
+| `DELETE /api/v1/tasks/{id}/` | Required | Delete a task | `204 No Content` |
+| `POST /api/v1/auth/token/` | Public | Obtain an access token, if JWT authentication is selected | `200 OK` |
+| `POST /api/v1/auth/token/refresh/` | Public with refresh token | Obtain a new access token, if JWT is selected | `200 OK` |
+
+Registration is optional. If self-service registration is required, add `POST /api/v1/auth/register/`, validate unique account identifiers, and use Django's `create_user`/password hashing flow. Do not expose admin-only user management through public task endpoints.
+
+### Task Object
+
+Example response:
+
+```json
+{
+  "id": 42,
+  "title": "Submit project report",
+  "description": "Review the final draft and submit it.",
+  "is_completed": false,
+  "created_at": "2026-10-07T09:30:00Z",
+  "updated_at": "2026-10-07T09:30:00Z"
+}
+```
+
+### Create Task
+
+`POST /api/v1/tasks/`
+
+Request:
+
+```json
+{
+  "title": "Submit project report",
+  "description": "Review the final draft and submit it."
+}
+```
+
+The server sets `id`, `owner`, `is_completed` (default `false`), `created_at`, and `updated_at`. A successful response returns `201 Created`, the task object, and optionally a `Location` header pointing to `/api/v1/tasks/42/`.
+
+### List and Filter Tasks
+
+`GET /api/v1/tasks/?is_completed=false&search=report&ordering=-created_at&page=1&page_size=20`
+
+Suggested query parameters:
+
+- `is_completed`: filter by completion state (`true` or `false`).
+- `search`: search title and description, if search is enabled.
+- `ordering`: allow-listed fields such as `created_at`, `updated_at`, or `title`; prefix with `-` for descending order.
+- `page` and `page_size`: pagination controls with a configured maximum page size.
+
+Example paginated response:
+
+```json
+{
+  "count": 1,
+  "next": null,
+  "previous": null,
+  "results": [
+    {
+      "id": 42,
+      "title": "Submit project report",
+      "description": "Review the final draft and submit it.",
+      "is_completed": false,
+      "created_at": "2026-10-07T09:30:00Z",
+      "updated_at": "2026-10-07T09:30:00Z"
+    }
+  ]
+}
+```
+
+The queryset must be filtered to the current authenticated user before applying filters or pagination.
+
+### Retrieve, Update, and Delete
+
+- `GET /api/v1/tasks/42/` returns the task or `404 Not Found`.
+- `PUT /api/v1/tasks/42/` requires all editable fields, such as `title` and `description`.
+- `PATCH /api/v1/tasks/42/` accepts only the fields being changed, for example `{ "is_completed": true }`.
+- `DELETE /api/v1/tasks/42/` returns `204 No Content` after deletion.
+
+The server must not allow clients to change `id`, `owner`, `created_at`, or other server-managed fields.
+
+### Validation Rules
+
+- `title`: required on create; trim surrounding whitespace; reject an empty value; limit to 200 characters.
+- `description`: optional; limit to a documented maximum (for example, 5,000 characters).
+- `is_completed`: boolean only; default to `false` on creation.
+- IDs: integer or UUID, consistently chosen by the model and URL converter.
+- Query parameters: validate values and enforce maximum page size; reject or ignore unsupported ordering fields consistently.
+
+### Error Contract
+
+Use a stable JSON shape for expected API errors. Example validation response (`400 Bad Request`):
+
+```json
+{
+  "error": {
+    "code": "validation_error",
+    "message": "The request contains invalid data.",
+    "details": {
+      "title": ["This field is required."]
+    }
+  }
+}
+```
+
+Recommended status mapping:
+
+| Status | Meaning | Example |
+|---:|---|---|
+| `400` | Invalid request | Missing title or invalid boolean |
+| `401` | Authentication required or invalid | Missing/expired credentials |
+| `403` | Authenticated but not permitted | Restricted administrative operation |
+| `404` | Resource not found or not visible to this user | Unknown/other user's task |
+| `405` | Method unsupported | `PATCH` on a read-only endpoint |
+| `429` | Rate limit exceeded, if configured | Too many authentication attempts |
+| `500` | Unexpected server failure | Unhandled application error |
+| `503` | Service temporarily unavailable, when applicable | Database unavailable during maintenance |
+
+Never return stack traces, SQL errors, password data, tokens, or secret configuration to clients. Log diagnostic context on the server while avoiding sensitive values.
+
+## Detailed Database Design
+
+> This is a proposed relational design for private per-user task lists. If the application intentionally supports anonymous/shared tasks, revise ownership and access rules before implementation.
+
+### Entity Relationship
+
+```mermaid
+erDiagram
+    AUTH_USER ||--o{ TASK : owns
+    AUTH_USER {
+        bigint id PK
+        string username UK
+        string email
+        string password_hash
+        boolean is_active
+        datetime date_joined
+    }
+    TASK {
+        bigint id PK
+        bigint owner_id FK
+        string title
+        text description
+        boolean is_completed
+        datetime created_at
+        datetime updated_at
+    }
+```
+
+Use Django's configured user model (`settings.AUTH_USER_MODEL`) as the user entity. The field details for the user table are managed by Django and may differ depending on whether the project uses the default or a custom user model. Do not create a separate password table or store raw passwords.
+
+### Task Table Specification
+
+| Column | Suggested type | Required/default | Purpose and rules |
+|---|---|---|---|
+| `id` | Big integer primary key (or UUID, if chosen) | Required, generated | Stable task identifier. Choose one ID strategy before initial migrations. |
+| `owner_id` | Foreign key to configured user table | Required | Task owner; set by the server from the authenticated request. |
+| `title` | `varchar(200)` | Required | Non-empty after trimming whitespace. |
+| `description` | `text` | Optional, blank allowed | Longer task notes; apply an API-level maximum length. |
+| `is_completed` | Boolean | Required, default `false` | Whether the task is complete. |
+| `created_at` | Timezone-aware datetime | Required, set on creation | Audit timestamp; clients cannot set it. |
+| `updated_at` | Timezone-aware datetime | Required, updated on save | Last modification timestamp; clients cannot set it. |
+
+### Relationships and Delete Behavior
+
+- One user owns zero or more tasks; each task has exactly one owner.
+- Use a foreign key to `settings.AUTH_USER_MODEL`.
+- Recommended default: `on_delete=models.CASCADE`, so deleting a user deletes that user's tasks. If the product must retain tasks after account deletion, define a deliberate anonymization/retention policy instead.
+- The API must scope task queries by owner, even though the database foreign key guarantees that an owner exists.
+
+### Constraints and Indexes
+
+- Primary key on `id`.
+- Foreign key on `owner_id` with a database index.
+- Add a composite index on `(owner, is_completed, created_at)` if the common list view filters by completion and sorts by creation date.
+- Add an index on `(owner, updated_at)` only if queries commonly sort/filter by update time and measurements justify it.
+- Do not make `title` unique: users may create multiple tasks with the same title.
+- Enforce title length and non-empty validation at the API/model level. Add database constraints only when they are portable and consistent with the supported database.
+- Keep indexes aligned with real query patterns; unnecessary indexes slow writes and consume storage.
+
+Example Django model outline (adapt to the project and user model):
+
+```python
+from django.conf import settings
+from django.db import models
+
+
+class Task(models.Model):
+    owner = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="tasks",
+    )
+    title = models.CharField(max_length=200)
+    description = models.TextField(blank=True)
+    is_completed = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["owner", "is_completed", "created_at"]),
+        ]
+
+    def __str__(self):
+        return self.title
+```
+
+This is a design example, not implemented code. If anonymous tasks are intended, `owner` would need a different design, and the privacy model should be reconsidered.
+
+### Data Integrity and Lifecycle
+
+- Create and update records through Django models/ORM so validation and timestamps are consistently applied.
+- Use Django migrations as the versioned source of database schema changes (`makemigrations` to generate, `migrate` to apply).
+- Back up the production database on a defined schedule and test restore procedures.
+- Define retention and deletion behavior before adding task history or soft deletion.
+- If concurrent edits become important, consider an explicit version field or `updated_at` conflict check; it is not needed for the initial CRUD design.
+
+### Database Configuration Guidance
+
+- **Development:** SQLite is convenient for local setup and demos.
+- **Production:** PostgreSQL is a suitable relational database for concurrent users and deployment environments.
+- Configure database credentials via environment variables or a secret manager.
+- Use `USE_TZ = True` and store/return timezone-aware timestamps.
+- Do not commit local database files or production credentials to the repository.
+

@@ -2,7 +2,7 @@
 
 A Django-based REST API for creating and managing to-do tasks.
 
-> **Status:** This README describes a proposed system design. The repository currently contains documentation only, so the packages, endpoints, database, and deployment described below must be confirmed against the implementation before being presented as existing features.
+> **Status:** The repository now contains a starter Django project, a `tasks` app, an authenticated task CRUD API, and SQLite migrations. Production hosting and JWT authentication remain design options, not implemented features.
 
 ## System Requirements
 
@@ -19,8 +19,8 @@ Provide an API through which people can organize tasks: create them, view them, 
 
 - Create, list, retrieve, update, complete, and delete tasks.
 - Validate task data and return useful error responses for invalid requests.
-- If accounts are enabled, associate every task with its owner and enforce ownership on task operations.
-- If authentication is enabled, allow users to authenticate before accessing protected operations.
+- Associate every task with its owner and enforce ownership on task operations.
+- Require authentication before users access task operations.
 
 ### Data Requirements
 
@@ -31,7 +31,7 @@ A task should include:
 - Optional description
 - Completion status
 - Creation and last-updated timestamps
-- Owner/user reference when accounts are enabled
+- Owner/user reference
 
 User account credentials must be handled by Django's authentication system. Passwords must never be stored as plain text.
 
@@ -80,7 +80,7 @@ flowchart LR
 |---|---|---|
 | Client | Sends task requests and displays responses. | Browser, mobile app, or API client; JSON over HTTP |
 | API routing | Maps URL paths and HTTP methods to handlers. | Django URL dispatcher, DRF routers |
-| Authentication | Identifies the requester, if accounts are enabled. | Django authentication; DRF authentication classes; JWT library such as Simple JWT if token authentication is selected |
+| Authentication | Identifies the requester for protected task operations. | Django authentication; DRF authentication classes; JWT library such as Simple JWT if token authentication is selected |
 | Permissions | Checks whether the requester may perform an operation and access a task. | DRF permissions and owner-filtered querysets |
 | Views / business logic | Coordinates each operation and returns an HTTP response. | Django REST Framework views or viewsets |
 | Serializers | Validates request data and converts model data to/from JSON. | DRF serializers |
@@ -118,18 +118,18 @@ erDiagram
 
 ### 4. API Design
 
-The following paths are a suggested REST interface; replace them with the actual URL routes when implemented.
+These are the current task routes registered by the DRF router.
 
 | Method | Suggested path | Purpose | Typical success response |
 |---|---|---|---|
-| `POST` | `/api/tasks/` | Create a task | `201 Created` with the new task |
-| `GET` | `/api/tasks/` | List the requester's tasks | `200 OK` with a task list |
-| `GET` | `/api/tasks/{id}/` | Retrieve one task | `200 OK` with the task |
-| `PUT` | `/api/tasks/{id}/` | Replace editable task fields | `200 OK` with the updated task |
-| `PATCH` | `/api/tasks/{id}/` | Partially update fields or completion status | `200 OK` with the updated task |
-| `DELETE` | `/api/tasks/{id}/` | Delete a task | `204 No Content` |
-| `POST` | `/api/auth/register/` | Register an account, if supported | `201 Created` |
-| `POST` | `/api/auth/login/` | Authenticate, if supported | `200 OK` with session/token response |
+| `POST` | `/api/v1/tasks/` | Create a task | `201 Created` with the new task |
+| `GET` | `/api/v1/tasks/` | List the requester's tasks | `200 OK` with a task list |
+| `GET` | `/api/v1/tasks/{id}/` | Retrieve one task | `200 OK` with the task |
+| `PUT` | `/api/v1/tasks/{id}/` | Replace editable task fields | `200 OK` with the updated task |
+| `PATCH` | `/api/v1/tasks/{id}/` | Partially update fields or completion status | `200 OK` with the updated task |
+| `DELETE` | `/api/v1/tasks/{id}/` | Delete a task | `204 No Content` |
+| — | Not implemented | No public registration endpoint is configured | — |
+| — | Django authentication | Session and Basic authentication are enabled; no custom login/token API endpoint is configured | — |
 
 For private tasks, list and detail queries must be restricted to the authenticated user. The API should not accept an owner ID from an untrusted client as proof of ownership; derive the owner from the authenticated request.
 
@@ -234,13 +234,13 @@ For a production deployment, configure a supported Django application server, HT
 | Deployment | Serve the API in a production environment. | Gunicorn/ASGI server, Nginx or managed hosting |
 | Diagram documentation | Keep diagrams readable in the GitHub README. | Mermaid; diagrams.net for manually drawn/exported diagrams |
 
-## Assumptions to Confirm
+## Implementation Status
 
-Before treating this design as implemented, verify whether the project includes Django REST Framework, user accounts, authentication, per-user task ownership, Django admin, the suggested routes, PostgreSQL, and the proposed production hosting tools. Update the diagram and tables to match the actual project.
+The current code includes Django REST Framework, Django user accounts, authenticated per-user task ownership, Django admin, and task routes under `/api/v1/tasks/`. PostgreSQL, JWT authentication, registration endpoints, and production hosting remain proposed options.
 
 ## Detailed API Design
 
-> The API contract below is a proposed design for implementation. Paths and behaviors should be aligned with the code once the Django API is built.
+> This section records the current API behavior. Proposed extensions are identified separately.
 
 ### API Conventions
 
@@ -482,4 +482,254 @@ This is a design example, not implemented code. If anonymous tasks are intended,
 - Configure database credentials via environment variables or a secret manager.
 - Use `USE_TZ = True` and store/return timezone-aware timestamps.
 - Do not commit local database files or production credentials to the repository.
+
+
+## Step-by-Step: Run the Django Project and Task App
+
+The following process creates the project from an empty folder and runs the initial task API. The starter code in this repository already includes these steps through the initial database migration.
+
+### Step 1: Create a project folder and virtual environment
+
+In PowerShell, open a terminal in the folder where you want the repository, then run:
+
+```powershell
+mkdir todo-api
+cd todo-api
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install --upgrade pip
+```
+
+Using the virtual environment's Python executable directly avoids needing to change PowerShell's script execution policy.
+
+### Step 2: Install dependencies
+
+Create `requirements.txt` with:
+
+```text
+Django>=5.2,<6.2
+djangorestframework>=3.16,<3.19
+```
+
+Install them:
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+```
+
+### Step 3: Create the Django project and task app
+
+Run these commands from the repository root:
+
+```powershell
+.\.venv\Scripts\django-admin.exe startproject config .
+.\.venv\Scripts\python.exe manage.py startapp tasks
+```
+
+`config` contains project settings and root URLs. `tasks` contains task-specific models, serializers, views, URLs, and migrations.
+
+### Step 4: Register Django REST Framework and the app
+
+Add both apps to `INSTALLED_APPS` in `config/settings.py`:
+
+```python
+INSTALLED_APPS = [
+    # Django's built-in apps...
+    "rest_framework",
+    "tasks",
+]
+```
+
+Add the starter API defaults to the same settings file. These defaults require sign-in and paginate results at 20 tasks per page:
+
+```python
+REST_FRAMEWORK = {
+    "DEFAULT_PERMISSION_CLASSES": [
+        "rest_framework.permissions.IsAuthenticated",
+    ],
+    "DEFAULT_AUTHENTICATION_CLASSES": [
+        "rest_framework.authentication.SessionAuthentication",
+        "rest_framework.authentication.BasicAuthentication",
+    ],
+    "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.PageNumberPagination",
+    "PAGE_SIZE": 20,
+}
+```
+
+Basic authentication is for local development and must only be used over HTTPS in production. A production client can use a token authentication method after one is configured.
+
+### Step 5: Define the Task database model
+
+In `tasks/models.py`, define a task owned by a Django user:
+
+```python
+from django.conf import settings
+from django.db import models
+
+
+class Task(models.Model):
+    owner = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="tasks",
+    )
+    title = models.CharField(max_length=200)
+    description = models.TextField(blank=True)
+    is_completed = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [models.Index(fields=["owner", "is_completed", "created_at"])]
+```
+
+The owner is linked to Django's configured user model. The API assigns the current user automatically; clients cannot choose another owner.
+
+### Step 6: Add request and response validation
+
+Create `tasks/serializers.py`:
+
+```python
+from rest_framework import serializers
+from .models import Task
+
+
+class TaskSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Task
+        fields = ("id", "title", "description", "is_completed", "created_at", "updated_at")
+        read_only_fields = ("id", "created_at", "updated_at")
+
+    def validate_title(self, value):
+        value = value.strip()
+        if not value:
+            raise serializers.ValidationError("Title cannot be blank.")
+        return value
+```
+
+### Step 7: Add authenticated, owner-scoped CRUD views
+
+In `tasks/views.py`:
+
+```python
+from rest_framework import viewsets
+from rest_framework.permissions import IsAuthenticated
+from .models import Task
+from .serializers import TaskSerializer
+
+
+class TaskViewSet(viewsets.ModelViewSet):
+    serializer_class = TaskSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        return Task.objects.filter(owner=self.request.user)
+
+    def perform_create(self, serializer):
+        serializer.save(owner=self.request.user)
+```
+
+The queryset filter ensures users can only list or retrieve their own tasks. The same scoped queryset protects update and delete operations.
+
+### Step 8: Register API URLs
+
+Create `tasks/urls.py`:
+
+```python
+from rest_framework.routers import DefaultRouter
+from .views import TaskViewSet
+
+router = DefaultRouter()
+router.register("tasks", TaskViewSet, basename="task")
+urlpatterns = router.urls
+```
+
+Include it from `config/urls.py`:
+
+```python
+from django.contrib import admin
+from django.urls import include, path
+
+urlpatterns = [
+    path("admin/", admin.site.urls),
+    path("api/v1/", include("tasks.urls")),
+]
+```
+
+### Step 9: Create and apply database migrations
+
+```powershell
+.\.venv\Scripts\python.exe manage.py makemigrations tasks
+.\.venv\Scripts\python.exe manage.py migrate
+```
+
+Django creates the SQLite database locally and records schema changes in `tasks/migrations/`. Commit migration files; do not commit the local `db.sqlite3` file.
+
+### Step 10: Create a user and start the server
+
+```powershell
+.\.venv\Scripts\python.exe manage.py createsuperuser
+.\.venv\Scripts\python.exe manage.py runserver
+```
+
+The development server is available at `http://127.0.0.1:8000/`. Keep it for local development only; use a production server and HTTPS when deploying.
+
+### Step 11: Send requests to the API
+
+Use the superuser username and password created in the previous step. In a second PowerShell window, create a task:
+
+```powershell
+curl.exe -u YOUR_USERNAME:YOUR_PASSWORD -H "Content-Type: application/json" -d '{"title":"First task","description":"Try the API"}' http://127.0.0.1:8000/api/v1/tasks/
+```
+
+List tasks:
+
+```powershell
+curl.exe -u YOUR_USERNAME:YOUR_PASSWORD http://127.0.0.1:8000/api/v1/tasks/
+```
+
+The router also provides detail, update, partial-update, and delete operations at `/api/v1/tasks/{id}/` using `GET`, `PUT`, `PATCH`, and `DELETE`. For example, mark task 1 complete:
+
+```powershell
+curl.exe -u YOUR_USERNAME:YOUR_PASSWORD -X PATCH -H "Content-Type: application/json" -d '{"is_completed":true}' http://127.0.0.1:8000/api/v1/tasks/1/
+```
+
+### Step 12: Inspect tasks in Django Admin
+
+The `Task` model is registered in `tasks/admin.py`. Open `http://127.0.0.1:8000/admin/` and sign in with the superuser credentials to manage task records.
+
+### Files created for this starter
+
+```text
+config/                 Django project settings and root URLs
+ tasks/                 Task app
+   migrations/           Database migrations
+   models.py             Task database model
+   serializers.py        JSON validation and representation
+   views.py              Authenticated CRUD API
+   urls.py               Task API routes
+manage.py                Django management entry point
+requirements.txt         Python dependencies
+.gitignore               Local database, environment, and cache exclusions
+```
+
+> The API currently uses Django session/basic authentication and SQLite from the project settings. Registration endpoints, JWT authentication, PostgreSQL configuration, automated tests, and production deployment are not included.
+
+## Local Django Setup
+
+The Django project and task app are already included. From the repository root on Windows, create a virtual environment, install dependencies, migrate the SQLite database, and start the server:
+
+```powershell
+py -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+python manage.py migrate
+python manage.py runserver
+```
+
+Do not rerun `django-admin startproject` or `startapp`; `config/`, `tasks/`, and `manage.py` already exist. Use `python manage.py createsuperuser` if you need a local account to sign in to the authenticated API or Django admin. The task API routes are under `/api/v1/tasks/`.
+
+See [requirements.md](requirements.md) for complete setup steps, available API routes, and project notes. `requirements.txt` is the pip dependency file.
+
 

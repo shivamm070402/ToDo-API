@@ -1,123 +1,239 @@
 # ToDo API Application
 
-A REST API for creating and managing to-do tasks, built with a Django backend.
+A Django-based REST API for creating and managing to-do tasks.
+
+> **Status:** This README describes a proposed system design. The repository currently contains documentation only, so the packages, endpoints, database, and deployment described below must be confirmed against the implementation before being presented as existing features.
 
 ## System Requirements
 
-### 1. Purpose
+### Purpose
 
-The system provides an API for users to organize and track tasks. It supports creating, viewing, updating, completing, and deleting tasks.
+Provide an API through which people can organize tasks: create them, view them, update their details or completion status, and delete them.
 
-### 2. Users and Roles
+### Users and Roles
 
-- **Task user:** Uses the API to manage tasks. If user accounts are enabled, each user can access only their own tasks.
-- **Administrator:** Maintains the application and can manage records and accounts through Django admin, if configured.
+- **Task user:** Manages their own tasks. When accounts are enabled, users must not see or modify another user's tasks.
+- **Administrator:** Maintains the service and manages accounts or records through Django admin, if enabled.
 
-### 3. Functional Requirements
+### Functional Requirements
 
-- The system shall allow a user to create a task.
-- The system shall allow a user to retrieve a list of tasks and the details of an individual task.
-- The system shall allow a user to update task information and completion status.
-- The system shall allow a user to delete a task.
-- If authentication is enabled, the system shall associate tasks with their owner and restrict access accordingly.
-- The system shall validate submitted task data and report invalid input clearly.
+- Create, list, retrieve, update, complete, and delete tasks.
+- Validate task data and return useful error responses for invalid requests.
+- If accounts are enabled, associate every task with its owner and enforce ownership on task operations.
+- If authentication is enabled, allow users to authenticate before accessing protected operations.
 
-### 4. Data Requirements
+### Data Requirements
 
-The system shall store the following task information, as applicable:
+A task should include:
 
-- Task ID
+- Unique task ID
 - Title
-- Description
+- Optional description
 - Completion status
-- Creation timestamp
-- Last-updated timestamp
-- Owner/user reference, when accounts are enabled
+- Creation and last-updated timestamps
+- Owner/user reference when accounts are enabled
 
-If user accounts are supported, the system shall store account identifiers and securely managed authentication information. Passwords must not be stored as plain text; Django's password hashing should be used.
+User account credentials must be handled by Django's authentication system. Passwords must never be stored as plain text.
 
-### 5. API Requirements
+### Non-Functional Requirements
 
-The API should provide endpoints for these operations. Actual URL paths and methods depend on the implementation.
-
-| Operation | Typical HTTP method | Purpose |
-|---|---|---|
-| Create task | `POST` | Add a new task |
-| List tasks | `GET` | Retrieve tasks available to the requester |
-| Retrieve task | `GET` | Retrieve one task by ID |
-| Update task | `PUT` or `PATCH` | Edit task fields or completion status |
-| Delete task | `DELETE` | Remove a task |
-| Register/login | `POST` | Authenticate users, if accounts are enabled |
-
-### 6. Security Requirements
-
-- The system shall validate and sanitize incoming data using Django/DRF serializers or equivalent validation.
-- If tasks are private, the API shall require authentication and enforce ownership checks on every task operation.
-- The system shall not expose credentials, secret keys, or detailed internal errors in API responses.
-- Production deployments shall use HTTPS and keep secret keys and database credentials outside source control.
-- Administrative access shall be restricted to authorized administrators.
-- The system shall use appropriate permissions, HTTP methods, and status codes.
-
-### 7. Error Handling and Failure Requirements
-
-- Invalid or missing input shall return a clear client error, typically `400 Bad Request`.
-- Requests without required authentication shall return `401 Unauthorized` or `403 Forbidden`, as appropriate.
-- Requests for tasks that do not exist or are not accessible shall return `404 Not Found` (or the configured permission response).
-- Unexpected server errors shall return a generic `500 Internal Server Error` response without exposing sensitive implementation details.
-- Unexpected failures should be logged for diagnosis while protecting personal and authentication data.
-
-### 8. Non-Functional Requirements
-
-- The API shall return consistent JSON responses and HTTP status codes.
-- The application shall persist task data in its configured database.
-- The backend should be maintainable using Django's project and application structure.
-- Production configuration should define appropriate database backups, logging, and deployment settings.
-
-### 9. Assumptions and Implementation Notes
-
-This document describes the intended system at a high level. Confirm that account registration, authentication, task ownership, Django admin, and the listed endpoints are implemented before treating them as existing features. Replace the typical API operations above with the actual routes in the project.
+- Provide consistent JSON responses and HTTP status codes.
+- Persist data in a relational database.
+- Keep configuration and credentials out of source control.
+- Use HTTPS in production, and configure logging and database backups for the deployment.
 
 ## System Design
 
-### Architecture Diagram
+### 1. Architecture Overview
 
-The diagram shows a recommended baseline for the ToDo API. It is a logical design; confirm or update the components to match the actual deployment.
+The design uses a client-server model. A client sends JSON requests to a Django REST Framework API. The API authenticates and authorizes requests, validates input, applies application logic, and reads or writes task records through Django's ORM. A relational database stores the records.
 
 ```mermaid
 flowchart LR
-    U[User / Client App] -->|HTTPS JSON requests| API[API Layer\nDjango REST Framework]
-    API --> AUTH[Authentication & Permissions\nDjango auth / JWT]
-    API --> VAL[Validation & Business Logic\nSerializers and views]
-    VAL --> DB[(Relational Database\nSQLite for development\nPostgreSQL for production)]
-    API --> LOG[Application Logs]
-    ADMIN[Administrator] -->|HTTPS| DJ[Django Admin]
-    DJ --> DB
-    API -->|JSON response| U
+    USER[Task User / Client App]
+    ADMIN[Administrator]
+    subgraph APP[ToDo API Application]
+        direction TB
+        ROUTER[URL Router / API Endpoints]
+        AUTH[Authentication and Permissions]
+        VIEW[Views / Business Logic]
+        SER[Serializers / Validation]
+        ORM[Django ORM / Models]
+        DJADMIN[Django Admin]
+        LOG[Application Logging]
+        ROUTER --> AUTH --> VIEW
+        VIEW --> SER
+        VIEW --> ORM
+        DJADMIN --> ORM
+        VIEW -. errors and events .-> LOG
+    end
+    DB[(Relational Database)]
+    USER -->|HTTPS JSON request| ROUTER
+    ROUTER -->|JSON response| USER
+    ADMIN -->|HTTPS admin access| DJADMIN
+    ORM <-->|queries and records| DB
 ```
 
-### Design Concepts and Tools
+### 2. Components and Responsibilities
 
-| System design concept | How it applies | Suitable tools / technologies |
+| Component | Responsibility | Suggested technology |
 |---|---|---|
-| Client-server architecture | A web or mobile client sends requests to the backend API. | HTTP/HTTPS, JSON |
-| REST API | Tasks are managed through resource-based endpoints and standard HTTP methods. | Django REST Framework (DRF) |
-| Layered design | API views handle requests, serializers validate data, and models represent stored records. | Django, DRF serializers, Django ORM |
-| Authentication and authorization | Confirms identity and limits users to permitted operations and their own tasks. | Django authentication and permissions; JWT library such as Simple JWT if token auth is needed |
-| Relational data storage | Stores users and tasks, including ownership and timestamps. | SQLite for local development; PostgreSQL recommended for production |
-| Input validation | Rejects missing, malformed, or invalid task data before saving. | DRF serializers and Django model validation |
-| Error handling | Converts validation, missing-resource, and server failures into consistent HTTP responses. | DRF exceptions and custom exception handler, if needed |
-| Security in transit | Protects API requests and credentials while they travel over the network. | HTTPS/TLS, typically configured at the deployment proxy or hosting platform |
-| Configuration and secrets | Keeps environment-specific settings and credentials out of source code. | Environment variables; `django-environ` or `python-decouple` (optional) |
-| Logging and monitoring | Captures errors and operational events for troubleshooting. | Python/Django logging; hosting provider monitoring (optional) |
-| Deployment and reverse proxy | Serves the Django application reliably in production. | Gunicorn or Uvicorn as appropriate; Nginx or a managed hosting platform |
+| Client | Sends task requests and displays responses. | Browser, mobile app, or API client; JSON over HTTP |
+| API routing | Maps URL paths and HTTP methods to handlers. | Django URL dispatcher, DRF routers |
+| Authentication | Identifies the requester, if accounts are enabled. | Django authentication; DRF authentication classes; JWT library such as Simple JWT if token authentication is selected |
+| Permissions | Checks whether the requester may perform an operation and access a task. | DRF permissions and owner-filtered querysets |
+| Views / business logic | Coordinates each operation and returns an HTTP response. | Django REST Framework views or viewsets |
+| Serializers | Validates request data and converts model data to/from JSON. | DRF serializers |
+| Data access | Reads and writes records through model abstractions. | Django models and ORM |
+| Database | Persists tasks and user references. | SQLite for local development; PostgreSQL is a production option |
+| Admin interface | Allows authorized staff to manage records. | Django Admin, if enabled |
+| Logging | Records operational events and unexpected errors. | Python `logging` and the deployment platform's log service |
+| Production server | Runs the Django application and handles incoming traffic. | Gunicorn or another supported WSGI/ASGI server; Nginx or managed platform as the front end |
 
-### Typical Request Flow
+### 3. Data Model
 
-1. The client sends an HTTPS request containing JSON to a task endpoint.
-2. Django REST Framework checks authentication and permissions, when enabled.
-3. A serializer validates the request data.
-4. The view applies the task operation through Django's ORM.
-5. The configured database stores or retrieves the task.
-6. The API returns a JSON response with an appropriate HTTP status code.
+The following model assumes users have private task lists. If the application does not have user accounts, remove the `User` relationship and ownership rules.
 
-> **Note:** The tools above are recommendations for this design. The repository currently documents requirements only, so verify the actual installed packages, database configuration, authentication method, and deployment setup before describing them as implemented.
+```mermaid
+erDiagram
+    USER ||--o{ TASK : owns
+    USER {
+        integer id PK
+        string username
+        string email
+        string password_hash
+    }
+    TASK {
+        integer id PK
+        integer owner_id FK
+        string title
+        string description
+        boolean is_completed
+        datetime created_at
+        datetime updated_at
+    }
+```
+
+**Relationship:** One user can own many tasks; each task belongs to one user. The database should enforce the owner relationship with a foreign key. Use Django's built-in user model or a project-defined custom user model rather than storing passwords yourself.
+
+### 4. API Design
+
+The following paths are a suggested REST interface; replace them with the actual URL routes when implemented.
+
+| Method | Suggested path | Purpose | Typical success response |
+|---|---|---|---|
+| `POST` | `/api/tasks/` | Create a task | `201 Created` with the new task |
+| `GET` | `/api/tasks/` | List the requester's tasks | `200 OK` with a task list |
+| `GET` | `/api/tasks/{id}/` | Retrieve one task | `200 OK` with the task |
+| `PUT` | `/api/tasks/{id}/` | Replace editable task fields | `200 OK` with the updated task |
+| `PATCH` | `/api/tasks/{id}/` | Partially update fields or completion status | `200 OK` with the updated task |
+| `DELETE` | `/api/tasks/{id}/` | Delete a task | `204 No Content` |
+| `POST` | `/api/auth/register/` | Register an account, if supported | `201 Created` |
+| `POST` | `/api/auth/login/` | Authenticate, if supported | `200 OK` with session/token response |
+
+For private tasks, list and detail queries must be restricted to the authenticated user. The API should not accept an owner ID from an untrusted client as proof of ownership; derive the owner from the authenticated request.
+
+### 5. Request and Data Flow
+
+```mermaid
+sequenceDiagram
+    actor User
+    participant API as Django REST API
+    participant Auth as Authentication / Permissions
+    participant Serializer as Serializer
+    participant ORM as Django ORM
+    participant DB as Database
+    User->>API: HTTPS request with JSON
+    API->>Auth: Authenticate and check access
+    Auth-->>API: Allowed or reject
+    API->>Serializer: Validate request data
+    Serializer-->>API: Validated data or validation errors
+    API->>ORM: Perform task operation
+    ORM->>DB: Query or save task
+    DB-->>ORM: Result
+    ORM-->>API: Model instance or result
+    API-->>User: JSON response and HTTP status
+```
+
+1. The client sends an HTTPS request to an API endpoint.
+2. The API checks authentication and permissions when required.
+3. The serializer validates incoming data.
+4. The view runs the requested task operation through the ORM.
+5. The database returns or stores the task data.
+6. The API returns JSON and an appropriate HTTP status code.
+
+### 6. Security Design
+
+- Require authentication for private task data.
+- Check task ownership on every read, update, and delete operation.
+- Validate input with serializers and enforce reasonable field limits.
+- Use Django's password hashing and established authentication mechanisms.
+- Use HTTPS/TLS in production.
+- Store `SECRET_KEY`, database credentials, and token-signing secrets in environment configuration or a secret manager; never commit them to Git.
+- Disable Django debug mode in production and restrict Django admin to authorized staff.
+- Apply rate limiting to authentication endpoints where appropriate.
+- Avoid returning credentials, tokens, stack traces, or internal configuration in error responses.
+
+### 7. Errors and Failure Handling
+
+| Situation | Suggested status | Handling |
+|---|---:|---|
+| Invalid or missing request fields | `400 Bad Request` | Return field-level validation messages. |
+| Missing or invalid authentication | `401 Unauthorized` | Ask the client to authenticate. |
+| Authenticated user lacks permission | `403 Forbidden` | Reject the operation. |
+| Task does not exist or is not visible to this user | `404 Not Found` | Return a generic not-found response. |
+| Unsupported HTTP method | `405 Method Not Allowed` | Identify that the method is not supported. |
+| Temporary database or service failure | `500` or `503` | Return a generic message, log diagnostic details securely, and retry only when safe. |
+| Unexpected application error | `500 Internal Server Error` | Do not expose stack traces; log enough detail for investigation. |
+
+Responses should use a consistent JSON error structure, for example:
+
+```json
+{
+  "error": {
+    "code": "validation_error",
+    "message": "The request contains invalid data.",
+    "details": {
+      "title": ["This field is required."]
+    }
+  }
+}
+```
+
+### 8. Deployment View
+
+```mermaid
+flowchart LR
+    CLIENT[Client]
+    HTTPS[HTTPS / TLS]
+    PROXY[Reverse Proxy or Managed Ingress]
+    APP[ Django Application Server ]
+    DB[(PostgreSQL Database)]
+    SECRETS[Environment Variables / Secret Store]
+    LOGS[Centralized Logs and Monitoring]
+    CLIENT --> HTTPS --> PROXY --> APP
+    APP <-->|ORM connection| DB
+    SECRETS -. runtime configuration .-> APP
+    APP -. logs and metrics .-> LOGS
+```
+
+For a production deployment, configure a supported Django application server, HTTPS termination, a production database, environment-specific settings, database backups, and centralized logs. SQLite is suitable for local development; choose the production database based on hosting and operational needs.
+
+### 9. Design Concepts and Tools Summary
+
+| Concept | Use in this application | Suggested tools |
+|---|---|---|
+| Client-server architecture | Separate the user interface from task processing and storage. | HTTP/HTTPS, JSON |
+| REST | Use resource endpoints and standard HTTP methods. | Django REST Framework |
+| Layered architecture | Separate routing, request handling, validation, and persistence. | Django URLs, DRF views, serializers, models |
+| Relational data model | Link tasks to their owners and store structured records. | Django ORM, SQLite/PostgreSQL |
+| Authentication and authorization | Identify users and enforce access rules. | Django auth, DRF permissions; Simple JWT if JWT is selected |
+| Input validation | Reject malformed or incomplete task data. | DRF serializers, Django model validation |
+| Secure configuration | Keep secrets out of source code. | Environment variables or a secret manager |
+| Observability | Diagnose application and infrastructure failures. | Python logging and hosting-provider monitoring |
+| Deployment | Serve the API in a production environment. | Gunicorn/ASGI server, Nginx or managed hosting |
+| Diagram documentation | Keep diagrams readable in the GitHub README. | Mermaid; diagrams.net for manually drawn/exported diagrams |
+
+## Assumptions to Confirm
+
+Before treating this design as implemented, verify whether the project includes Django REST Framework, user accounts, authentication, per-user task ownership, Django admin, the suggested routes, PostgreSQL, and the proposed production hosting tools. Update the diagram and tables to match the actual project.
